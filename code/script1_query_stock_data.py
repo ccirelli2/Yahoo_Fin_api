@@ -11,10 +11,9 @@
 
 # IMPORT ALPHA VANTAGE API LIBRARY
 from alpha_vantage.timeseries import TimeSeries 
-import mysql.connector
-
 
 # INSTANTIATE CONNECTION TO MYSQL DATABASE
+import mysql.connector
 mydb = mysql.connector.connect(
                 host='localhost',
                 user='ccirelli2',
@@ -25,57 +24,106 @@ mydb = mysql.connector.connect(
 import pandas as pd
 import os
 import module1_stock_hist_data as m1
+import time
+import timeit 
+import logging 
 
-# INSTANTIATE CONNECTION TO ALPHA VANTAGE API
+# INSTANTIATE CONNECTION TO ALPHA VANTAGE API______________________________________
 ts = TimeSeries(key='0NVCHF5MD13R11PG', output_format='pandas', indexing_type='date')
 
-# GET INDV STOCK DATA
-def get_indv_stock_data(ticker):
-    stock_query = ts.get_daily(symbol=ticker, outputsize='compact')
-    stock_data = stock_query[0]
-    for row in stock_data.itertuples():
-        print(row)
-
-
-# GET LIST OF TICKERS IN SYP
-def get_tickers(mydb): 
-	sql_query = '''SELECT TICKER
-		       FROM SYP_TICKERS;'''
-	result = pd.read_sql(sql_query, mydb)
-	# Return List of Tickers
-	return result['TICKER']
 	
-# FUNCTION QUERY HISTORICAL STOCK DATA (INITIAL COMMIT)
+# FUNCTION QUERY HISTORICAL STOCK DATA (INITIAL COMMIT)____________________________
+
 def main_hist_stock_data_commit(mydb):
-	'Purpose:  Adds historical data to table'
-	# Generate list of tickers
-	list_tickers = get_tickers(mydb)	
-	# Count Object
+	'''Purpose:  Adds historical data to table
+	   07.06.19:	Adding a timer to not exceed 5 API calls per minute (free tier)'''
+
+	# Generate list of tickers-----------------------------------------------------
+	'''Get list of all SYP tickers, limit api calls to only those not in table'''
+	SYP_INDEX_tickers = m1.get_tickers(mydb, 'SYP_TICKERS')
+	SYP_STOCK_DATA_tickers = [x for x in m1.get_tickers(mydb, 'SYP_STOCK_DATA')]	
+	remaining_list_tickers = [x for x in SYP_INDEX_tickers if x not in SYP_STOCK_DATA_tickers]	
+	# Timer & Count Object---------------------------------------------------------
 	Count = 1
-	# Iterate List 
-	for ticker in list_tickers:
-		# User Feedback
-		print('Starting stock data insertion for {}, which is {} of {}'.format(ticker, Count, len(list_tickers)))
-		# Get Historical Stock Data
-		'''Note:  ts is the instantiation of TimeSeries using key and output format'''
-		stock_query = ts.get_daily(symbol=ticker ,outputsize='full')
-		stock_data = stock_query[0]
-		# Iterate the Individual Stock Data Table & Generate A Tuple
-		for row in stock_data.itertuples():
-			# Insert Data Into MySQL Table
-			pkey = str(row[0]) + '_' + ticker
-			'''date, volume, open, high, close, low'''
-			val = (row[0],row[2], row[3], row[4], row[5], row[1], ticker, pkey) 
-			try:
-				m1.sql_insert_function(mydb, val)
+	start = timeit.timeit()
 
-			except mysql.connector.errors.IntegrityError as err:
-				print('Error generated => {}'.format(err))
+	# Iterate List-----------------------------------------------------------------
+	for ticker in remaining_list_tickers:
+		
+		# Get Historical Stock Data------------------------------------------------
+		
+		# Check API Calls Per Minute (Max 5)
+		if Count == 5:
+			# Get Sleep Delay (if runtime < 60 seconds)
+			sleep_delay = m1.get_api_call_delay(start)
+			if sleep_delay != 0:
+				print('Sleeping for {} seconds'.format(sleep_delay))
+				time.sleep(sleep_delay)
+		 	# Reset Count & Start time 
+			Count = 1
+			start = timeit.timeit()
 
-		# Completion of Insert
-		print('Ticker => {} commited'.format(ticker))
-		# Increment Count
-		Count +=1
+		# Call API For Given Ticker------------------------------------------------
+		try:	
+			print('Calling API for ticker {}'.format(ticker))
+			stock_query = ts.get_daily(symbol=ticker ,outputsize='full')
+			stock_data = stock_query[0]
+			
+			# Iterate the Individual Stock Data Table & Generate A Tuple
+			print('Starting insertion for ticker {}'.format(ticker))
+			for row in stock_data.itertuples():
+
+				# Insert Data Into MySQL Table
+				pkey = str(row[0]) + '_' + ticker
+				val = (row[0],row[2], row[3], row[4], row[5], row[1], ticker, pkey)
+				# Try Insertion 
+				try:
+					m1.sql_insert_function(mydb, val)
+				# Except MySQL Error
+				except mysql.connector.errors.IntegrityError as err:
+					print('Error generated => {}'.format(err))
+		
+			# User Feedback
+			print('Ticker => {} committed'.format(ticker))
+			Count +=1
+
+		# Except API Errors-------------------------------------------------------
+		except ValueError as err:
+			print('Error generated => {}'.format(err))
+			Count +=1
+
+		except KeyError as err:
+			print('Error generated => {} for stock {}'.format(err, ticker))
+			Count +=1
+		
+	# End of Function----------------------------------------------------------------	
+	return None
 
 
-main_hist_stock_data_commit(mydb)
+
+# RUN MAIN FUNCTION______________________________________________________________________
+stock_api_function = main_hist_stock_data_commit(mydb)
+
+
+# Generate Log File----------------------------------------------------------------------
+print('\n Generating loggin file')
+logging_output_dir = '/home/ccirelli2/Desktop/repositories/stock_api/logging'
+logging.basicConfig(
+        filename = logging_output_dir + 'log.txt',
+        level=logging.DEBUG,
+        format='%(asctime)s:%(levelname)s:%(message)s')
+print('Log files saved to {}'.format(logging_output_dir))
+logging.debug(stock_api_function)
+
+
+
+
+
+
+
+
+
+
+
+
+
