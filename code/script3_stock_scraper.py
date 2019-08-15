@@ -99,5 +99,3 @@ for ticker in syp_tickers:
 
 
 
-
-
